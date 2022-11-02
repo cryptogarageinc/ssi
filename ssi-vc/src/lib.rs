@@ -12,7 +12,7 @@ pub use ssi_core::{one_or_many::OneOrMany, uri::URI};
 use ssi_dids::did_resolve::DIDResolver;
 pub use ssi_dids::VerificationRelationship as ProofPurpose;
 use ssi_json_ld::{json_to_dataset, rdf::DataSet, ContextLoader};
-use ssi_jwk::{JWTKeys, JWK};
+use ssi_jwk::{Algorithm, JWTKeys, JWK};
 use ssi_jws::Header;
 pub use ssi_jwt::NumericDate;
 use ssi_ldp::{
@@ -644,6 +644,61 @@ impl Credential {
             ..self.to_jwt_claims()?
         };
         jwt_encode(&claims, keys)
+    }
+
+    /// Generate the data to be signed to generate a signed jwt.
+    pub fn generate_jwt_sign_data(
+        &self,
+        options: &LinkedDataProofOptions,
+        algorithm: Algorithm,
+        key_id: Option<String>,
+    ) -> Result<String, Error> {
+        let options = options.clone();
+        let LinkedDataProofOptions {
+            verification_method: _,
+            proof_purpose,
+            created,
+            challenge,
+            domain,
+            checks,
+            eip712_domain,
+            type_,
+        } = options;
+        if checks.is_some() {
+            return Err(Error::UnencodableOptionClaim("checks".to_string()));
+        }
+        if created.is_some() {
+            return Err(Error::UnencodableOptionClaim("created".to_string()));
+        }
+        if eip712_domain.is_some() {
+            return Err(Error::UnencodableOptionClaim("eip712Domain".to_string()));
+        }
+        if type_.is_some() {
+            return Err(Error::UnencodableOptionClaim("type".to_string()));
+        }
+        match proof_purpose {
+            None => (),
+            Some(ProofPurpose::AssertionMethod) => (),
+            Some(_) => return Err(Error::UnencodableOptionClaim("proofPurpose".to_string())),
+        }
+        let claims = JWTClaims {
+            nonce: challenge,
+            audience: match domain {
+                Some(domain) => Some(OneOrMany::One(StringOrURI::try_from(domain)?)),
+                None => None,
+            },
+            ..self.to_jwt_claims()?
+        };
+
+        let header = Header {
+            algorithm,
+            key_id,
+            ..Default::default()
+        };
+        let header_b64 = base64_encode_json(&header)?;
+        let payload_b64 = base64_encode_json(&claims)?;
+        let signing_input = header_b64 + "." + &payload_b64;
+        Ok(signing_input)
     }
 
     /// Encode the Verifiable Credential as JWT. If JWK is passed, sign it, otherwise it is
